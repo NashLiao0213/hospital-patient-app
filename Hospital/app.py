@@ -31,7 +31,7 @@ with tab1:
         
         # 匯出功能：將 Dataframe 轉成 CSV 格式的二進位檔
         # 使用 'utf-8-sig' 可以確保醫院同仁用 Windows Excel 開啟時中文不會變亂碼
-        csv_data = st.session_state.patient_db.to_csv(index=False).encode('utf-8-sig')
+        csv_data = st.session_state.patient_db.to_csv(index=False).encode('cp950')
         
         st.download_button(
             label="📥 匯出成標準 Excel/CSV 檔案",
