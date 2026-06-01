@@ -5,11 +5,12 @@ from datetime import datetime
 # 1. 初始化網頁設定與系統暫存資料庫 (使用 Streamlit Session State，重整網頁資料不會消失)
 st.set_page_config(page_title="醫院病患資料管理系統", layout="wide")
 
+# 定義系統統一的標準欄位格式
+REQUIRED_COLUMNS = ["病患編號", "姓名", "性別", "出生日期", "身分證字號", "聯絡電話", "主要病徵描述"]
+
 if "patient_db" not in st.session_state:
     # 建立初始的空資料表，欄位與定義的 CSV 格式完全相同
-    st.session_state.patient_db = pd.DataFrame(columns=[
-        "病患編號", "姓名", "性別", "出生日期", "身分證字號", "聯絡電話", "主要病徵描述"
-    ])
+    st.session_state.patient_db = pd.DataFrame(columns=REQUIRED_COLUMNS)
 
 st.title("🏥 醫院病患資料管理系統 (紙本轉數位化原型)")
 st.markdown("本系統支援**網頁上手動輸入**、**標準 CSV 批次匯入**與**資料整齊匯出**。")
@@ -29,7 +30,7 @@ with tab1:
         updated_df = st.data_editor(st.session_state.patient_db, num_rows="dynamic", use_container_width=True)
         st.session_state.patient_db = updated_df
         
-        # 💡 【優化點 1】匯出改用 'utf-8-sig'，確保 Windows Excel 打開不亂碼，且支援罕見字不報錯
+        # 匯出改用 'utf-8-sig'，確保 Windows Excel 打開不亂碼，且支援罕見字不報錯
         csv_data = st.session_state.patient_db.to_csv(index=False).encode('utf-8-sig')
         
         st.download_button(
@@ -84,13 +85,21 @@ with tab2:
 # ==========================================
 with tab3:
     st.subheader("上傳固定格式之 CSV 檔案")
-    st.caption("提示：上傳的檔案欄位必須完全符合：[病患編號, 姓名, 性別, 出生日期, 身分證字號, 聯絡電話, 主要病徵描述]")
+    st.caption(f"提示：上傳的檔案欄位必須包含：{REQUIRED_COLUMNS}")
     
-    # 提供一個空白範本供工作人員下載參考
-    template_df = pd.DataFrame(columns=["病患編號", "姓名", "性別", "出生日期", "身分證字號", "聯絡電話", "主要病徵描述"])
-    # 下載範本使用 utf-8-sig，讓 Excel 打開就是乾淨的中文欄位
+    # 💡 【要求 1 實作】建立含有「正確能讀取之範例資料」的範本，避免工作人員誤刪欄位
+    template_data = {
+        "病患編號": ["P000(範例資料請勿刪除)"],
+        "姓名": ["王小明"],
+        "性別": ["男"],
+        "出生日期": ["1995-01-01"],
+        "身分證字號": ["A123456789"],
+        "聯絡電話": ["0912345678"],
+        "主要病徵描述": ["例行健康檢查，無慢性病史。"]
+    }
+    template_df = pd.DataFrame(template_data, columns=REQUIRED_COLUMNS)
     template_csv = template_df.to_csv(index=False).encode('utf-8-sig')
-    st.download_button("📥 下載空白 CSV 匯入範本", data=template_csv, file_name="patient_template.csv", mime="text/csv")
+    st.download_button("📥 下載含有範例的 CSV 匯入範本", data=template_csv, file_name="patient_template_with_example.csv", mime="text/csv")
     
     uploaded_file = st.file_uploader("請選擇要匯入的 CSV 檔案", type=["csv"])
     
@@ -99,34 +108,42 @@ with tab3:
             # 自動雙重容錯讀取邏輯
             imported_df = None
             
-            # 第一步：先嘗試用 utf-8-sig 讀取
+            # 第一步：嘗試用 utf-8-sig 讀取
             try:
                 uploaded_file.seek(0)
                 imported_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
             except UnicodeDecodeError:
-                # 如果噴編碼錯誤，代表可能是 Excel 的 cp950/big5 格式，切換到 cp950 讀取
+                # 第二步：失敗則嘗試台灣 Windows Excel 預設的 cp950
                 uploaded_file.seek(0)
                 imported_df = pd.read_csv(uploaded_file, encoding='cp950')
             
             if imported_df is not None:
-                # 💡 【核心修正點】清除欄位名稱可能因為 Excel 產生的 \r 或前後空白
-                imported_df.columns = imported_df.columns.str.strip()
+                # 💡 【要求 2 & 4 實作】清洗欄位名稱，避免 Excel 換行符（\r）或前後空白干擾比對
+                imported_df.columns = imported_df.columns.str.strip().str.replace('\r', '', regex=False)
                 
-                # 判讀格式：檢查欄位是否完全一致
-                required_columns = list(template_df.columns)
-                if list(imported_df.columns) == required_columns:
-                    st.success("檔案格式檢查通過！開始判讀內容...")
+                # 檢查上傳的檔案是否包含了所有系統必要的欄位 (利用 set 集合比對)
+                missing_cols = set(REQUIRED_COLUMNS) - set(imported_df.columns)
+                extra_cols = set(imported_df.columns) - set(REQUIRED_COLUMNS)
+                
+                if not missing_cols:
+                    # 💡 【要求 4 實作】確保格式完全一致：自動重新排序欄位，只保留系統需要的標準欄位
+                    imported_df = imported_df[REQUIRED_COLUMNS]
+                    
+                    # 自動清除文字內容欄位中可能藏有的 \r 換行符
+                    for col in imported_df.select_dtypes(include=['object']).columns:
+                        imported_df[col] = imported_df[col].astype(str).str.strip().str.replace('\r', '', regex=False)
+                    
+                    # 💡 【要求 1 實作】自動過濾掉系統內建的範本提示資料
+                    imported_df = imported_df[imported_df["病患編號"] != "P000(範例資料請勿刪除)"]
+                    
+                    st.success("檔案格式檢查通過！已自動對齊標準欄位。")
+                    
+                    # 顯示即將匯入的資料預覽
+                    st.dataframe(imported_df, use_container_width=True)
                     
                     # 點擊按鈕確認寫入系統
-                    if st.button("確認將 Excel/CSV 資料填入網站系統"):
-                        # 排除重複的病患編號，避免蓋掉現有資料
+                    if st.button("確認將以上資料填入網站系統"):
                         existing_ids = st.session_state.patient_db["病患編號"].values
-                        
-                        # 💡 【防呆優化】確保讀進來的資料內容，欄位沒有被帶入奇怪的 \r 換行符
-                        # 尤其是最後一欄「主要病徵描述」如果含有 \r 會導致資料庫錯亂
-                        if "主要病徵描述" in imported_df.columns:
-                            imported_df["主要病徵描述"] = imported_df["主要病徵描述"].astype(str).str.replace('\r', '', regex=False)
-                        
                         # 篩選出新資料
                         new_records = imported_df[~imported_df["病患編號"].isin(existing_ids)]
                         duplicate_count = len(imported_df) - len(new_records)
@@ -138,10 +155,28 @@ with tab3:
                             st.warning(f"自動忽略了 {duplicate_count} 筆編號重複的資料。")
                         st.rerun()
                 else:
-                    # 💡 Debug 提示：如果還是失敗，網頁上會直接印出「讀到了什麼欄位」，方便比對
-                    st.error("❌ 檔案格式錯誤！欄位名稱或順序與系統不符。")
-                    st.write("系統要求的欄位：", required_columns)
-                    st.write("您檔案實際的欄位：", list(imported_df.columns))
+                    # 💡 【要求 3 實作】精準條列讀取錯誤與正確做法指引
+                    st.error("❌ 檔案格式錯誤！系統無法正確讀取此檔案。")
+                    
+                    col_err1, col_err2 = st.columns(2)
+                    with col_err1:
+                        st.markdown("### 🔍 錯誤分析")
+                        if missing_cols:
+                            st.write("⚠️ **缺少的必要欄位：**")
+                            st.write(list(missing_cols))
+                        if extra_cols:
+                            st.write("ℹ️ **多餘或名稱錯誤的欄位：**")
+                            st.write(list(extra_cols))
+                    
+                    with col_err2:
+                        st.markdown("### 💡 正確做法指引")
+                        st.markdown(
+                            "1. 請重新下載上方最新的 **「含有範例的 CSV 匯入範本」**。\n"
+                            "2. 請勿修改第一行的**欄位標頭名稱**與**順序**。\n"
+                            "3. 確認檔案內必須包含這 7 個標準欄位：\n"
+                            f"   `{REQUIRED_COLUMNS}`\n"
+                            "4. 重新填寫資料後，再次上傳。"
+                        )
                     
         except Exception as e:
-            st.error(f"讀取檔案時發生錯誤: {e}")
+            st.error(f"讀取檔案時發生嚴重的系統錯誤: {e}")
