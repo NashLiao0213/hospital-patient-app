@@ -88,7 +88,7 @@ with tab3:
     
     # 提供一個空白範本供工作人員下載參考
     template_df = pd.DataFrame(columns=["病患編號", "姓名", "性別", "出生日期", "身分證字號", "聯絡電話", "主要病徵描述"])
-    # 💡 【優化點 2】下載範本使用 utf-8-sig，讓 Excel 打開就是乾淨的中文欄位
+    # 下載範本使用 utf-8-sig，讓 Excel 打開就是乾淨的中文欄位
     template_csv = template_df.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 下載空白 CSV 匯入範本", data=template_csv, file_name="patient_template.csv", mime="text/csv")
     
@@ -96,12 +96,11 @@ with tab3:
     
     if uploaded_file is not None:
         try:
-            # 💡 【優化點 3】自動雙重容錯讀取邏輯
+            # 自動雙重容錯讀取邏輯
             imported_df = None
             
             # 第一步：先嘗試用 utf-8-sig 讀取
             try:
-                # 重新將指標移到檔案開頭
                 uploaded_file.seek(0)
                 imported_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
             except UnicodeDecodeError:
@@ -109,26 +108,40 @@ with tab3:
                 uploaded_file.seek(0)
                 imported_df = pd.read_csv(uploaded_file, encoding='cp950')
             
-            # 判讀格式：檢查欄位是否完全一致
-            required_columns = list(template_df.columns)
-            if imported_df is not None and list(imported_df.columns) == required_columns:
-                st.success("檔案格式檢查通過！開始判讀內容...")
+            if imported_df is not None:
+                # 💡 【核心修正點】清除欄位名稱可能因為 Excel 產生的 \r 或前後空白
+                imported_df.columns = imported_df.columns.str.strip()
                 
-                # 點擊按鈕確認寫入系統
-                if st.button("確認將 Excel/CSV 資料填入網站系統"):
-                    # 排除重複的病患編號，避免蓋掉現有資料
-                    existing_ids = st.session_state.patient_db["病患編號"].values
-                    # 篩選出新資料
-                    new_records = imported_df[~imported_df["病患編號"].isin(existing_ids)]
-                    duplicate_count = len(imported_df) - len(new_records)
+                # 判讀格式：檢查欄位是否完全一致
+                required_columns = list(template_df.columns)
+                if list(imported_df.columns) == required_columns:
+                    st.success("檔案格式檢查通過！開始判讀內容...")
                     
-                    if len(new_records) > 0:
-                        st.session_state.patient_db = pd.concat([st.session_state.patient_db, new_records], ignore_index=True)
-                        st.success(f"成功匯入 {len(new_records)} 筆新病患資料！")
-                    if duplicate_count > 0:
-                        st.warning(f"自動忽略了 {duplicate_count} 筆編號重複的資料。")
-                    st.rerun()
-            else:
-                st.error("❌ 檔案格式錯誤！欄位名稱或順序與系統不符，請下載上方範本比對。")
+                    # 點擊按鈕確認寫入系統
+                    if st.button("確認將 Excel/CSV 資料填入網站系統"):
+                        # 排除重複的病患編號，避免蓋掉現有資料
+                        existing_ids = st.session_state.patient_db["病患編號"].values
+                        
+                        # 💡 【防呆優化】確保讀進來的資料內容，欄位沒有被帶入奇怪的 \r 換行符
+                        # 尤其是最後一欄「主要病徵描述」如果含有 \r 會導致資料庫錯亂
+                        if "主要病徵描述" in imported_df.columns:
+                            imported_df["主要病徵描述"] = imported_df["主要病徵描述"].astype(str).str.replace('\r', '', regex=False)
+                        
+                        # 篩選出新資料
+                        new_records = imported_df[~imported_df["病患編號"].isin(existing_ids)]
+                        duplicate_count = len(imported_df) - len(new_records)
+                        
+                        if len(new_records) > 0:
+                            st.session_state.patient_db = pd.concat([st.session_state.patient_db, new_records], ignore_index=True)
+                            st.success(f"成功匯入 {len(new_records)} 筆新病患資料！")
+                        if duplicate_count > 0:
+                            st.warning(f"自動忽略了 {duplicate_count} 筆編號重複的資料。")
+                        st.rerun()
+                else:
+                    # 💡 Debug 提示：如果還是失敗，網頁上會直接印出「讀到了什麼欄位」，方便比對
+                    st.error("❌ 檔案格式錯誤！欄位名稱或順序與系統不符。")
+                    st.write("系統要求的欄位：", required_columns)
+                    st.write("您檔案實際的欄位：", list(imported_df.columns))
+                    
         except Exception as e:
             st.error(f"讀取檔案時發生錯誤: {e}")
