@@ -29,9 +29,8 @@ with tab1:
         updated_df = st.data_editor(st.session_state.patient_db, num_rows="dynamic", use_container_width=True)
         st.session_state.patient_db = updated_df
         
-        # 匯出功能：將 Dataframe 轉成 CSV 格式的二進位檔
-        # 使用 'utf-8-sig' 可以確保醫院同仁用 Windows Excel 開啟時中文不會變亂碼
-        csv_data = st.session_state.patient_db.to_csv(index=False).encode('cp950')
+        # 💡 【優化點 1】匯出改用 'utf-8-sig'，確保 Windows Excel 打開不亂碼，且支援罕見字不報錯
+        csv_data = st.session_state.patient_db.to_csv(index=False).encode('utf-8-sig')
         
         st.download_button(
             label="📥 匯出成標準 Excel/CSV 檔案",
@@ -89,6 +88,7 @@ with tab3:
     
     # 提供一個空白範本供工作人員下載參考
     template_df = pd.DataFrame(columns=["病患編號", "姓名", "性別", "出生日期", "身分證字號", "聯絡電話", "主要病徵描述"])
+    # 💡 【優化點 2】下載範本使用 utf-8-sig，讓 Excel 打開就是乾淨的中文欄位
     template_csv = template_df.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 下載空白 CSV 匯入範本", data=template_csv, file_name="patient_template.csv", mime="text/csv")
     
@@ -96,12 +96,22 @@ with tab3:
     
     if uploaded_file is not None:
         try:
-            # 讀取上傳的 CSV，設定 utf-8-sig 防止中文亂碼
-            imported_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+            # 💡 【優化點 3】自動雙重容錯讀取邏輯
+            imported_df = None
+            
+            # 第一步：先嘗試用 utf-8-sig 讀取
+            try:
+                # 重新將指標移到檔案開頭
+                uploaded_file.seek(0)
+                imported_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+            except UnicodeDecodeError:
+                # 如果噴編碼錯誤，代表可能是 Excel 的 cp950/big5 格式，切換到 cp950 讀取
+                uploaded_file.seek(0)
+                imported_df = pd.read_csv(uploaded_file, encoding='cp950')
             
             # 判讀格式：檢查欄位是否完全一致
             required_columns = list(template_df.columns)
-            if list(imported_df.columns) == required_columns:
+            if imported_df is not None and list(imported_df.columns) == required_columns:
                 st.success("檔案格式檢查通過！開始判讀內容...")
                 
                 # 點擊按鈕確認寫入系統
